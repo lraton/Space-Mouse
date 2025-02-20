@@ -16,186 +16,196 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <TinyUSB_Mouse_and_Keyboard.h>
-#include <OneButton.h>
-#include <Wire.h>
+#include <Adafruit_TinyUSB.h>
+#include "TLx493D_inc.hpp"
 #include <SimpleKalmanFilter.h>
+#include <OneButton.h>
+
+//--------------------------------------------------------------------+
+// MSC RAM Disk Config
+//--------------------------------------------------------------------+
+
+Adafruit_USBD_MSC usb_msc;
+
+// HID Report ID for keyboard and mouse
+enum {
+  RID_KEYBOARD = 1,
+  RID_MOUSE,
+};
+
+// USB HID report descriptor
+uint8_t const desc_hid_report[] = {
+  TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(RID_KEYBOARD)),
+  TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(RID_MOUSE))
+};
+
+// USB HID object
+Adafruit_USBD_HID usb_hid;
+
+using namespace ifx::tlx493d;
+
+// Definition of the power pin and sensor objects for Kit2Go XMC1100 boards.
+const uint8_t POWER_PIN = 15;  // XMC1100 : LED2
+
+// Magnetic sensor initialization
+TLx493D_A1B6 mag(Wire, TLx493D_IIC_ADDR_A0_e);
+
+// Kalman Filters for noise reduction in x, y, z axes
+SimpleKalmanFilter xFilter(1, 1, 0.2), yFilter(1, 1, 0.2), zFilter(1, 1, 0.2);
 
 // Setup buttons
 OneButton button1(2, true);
 OneButton button2(3, true);
 
+// Offset variables for calibration
 float xOffset = 0, yOffset = 0, zOffset = 0;
 float xCurrent = 0, yCurrent = 0, zCurrent = 0;
 
-int calSamples = 300;
+// Calibration and movement sensitivity settings
+int calSamples = 50;
 int sensivity = 8;
 int magRange = 3;
-int outRange = 127;      // Max allowed in HID report
-float xyThreshold = 0.4; // Center threshold
+int outRange = 127;       // Max allowed in HID report
+float xyThreshold = 0.4;  // Center threshold
 
 int inRange = magRange * sensivity;
-float zThreshold = xyThreshold * 1.5;
+float zThreshold = xyThreshold * 2;
 
 bool isOrbit = false;
+bool middle = false;
 
-#define TLV493D_ADDR 0x5E  // Indirizzo del TLV493D
-SimpleKalmanFilter xFilter(1, 1, 0.2), yFilter(1, 1, 0.2), zFilter(1, 1, 0.2);
+// HID key definitions
+uint8_t key_none[6] = { HID_KEY_NONE };
+uint8_t key_h[6] = { HID_KEY_H };
 
+/** Calibrate the magnetic sensor by averaging multiple readings. */
+void calibrate() {
+  double x, y, z;
+  Wire.begin();
+  mag.setPowerPin(POWER_PIN, OUTPUT, INPUT, HIGH, LOW, 0, 250000);
+  mag.begin();
+
+  for (int i = 1; i <= calSamples; i++) {
+    mag.getMagneticField(&x, &y, &z);
+    xOffset += x;
+    yOffset += y;
+    zOffset += z;
+  }
+
+  xOffset /= calSamples;
+  yOffset /= calSamples;
+  zOffset /= calSamples;
+}
+
+/** Initialize USB HID and buttons. */
 void setup() {
-  button1.attachClick(goHome);
-  button1.attachLongPressStop(goHome);
+  if (!TinyUSBDevice.isInitialized()) {
+    TinyUSBDevice.begin(0);
+  }
 
-  button2.attachClick(fitToScreen);
-  button2.attachLongPressStop(fitToScreen);
+  usb_msc.begin();
+  usb_hid.setReportDescriptor(desc_hid_report, sizeof(desc_hid_report));
+  usb_hid.setBootProtocol(HID_ITF_PROTOCOL_NONE);
+  usb_hid.setPollInterval(2);
+  usb_hid.begin();
 
-  // mouse and keyboard init
-  Mouse.begin();
-  Keyboard.begin();
+  if (TinyUSBDevice.mounted()) {
+    TinyUSBDevice.detach();
+    delay(10);
+    TinyUSBDevice.attach();
+  }
 
   Serial.begin(115200);
-  Wire.begin();
+  calibrate();
 
-  Serial.println("Attivazione TLV493D...");
+  button1.attachClick(btn1);
+  button2.attachClick(btn2);
+}
 
-  // Attivazione sensore
-  Wire.beginTransmission(TLV493D_ADDR);
-  Wire.write(0x00); // Registro di controllo
-  Wire.write(0x01); // Attiviamo il sensore
-  Wire.endTransmission();
+/** Process HID mouse movement. */
+void process_hid(int x, int y) {
+  if (usb_hid.ready()) {
+    usb_hid.mouseButtonPress(RID_MOUSE, MOUSE_BUTTON_MIDDLE);
+    middle = true;
+    delay(20);
+    usb_hid.mouseReport(RID_MOUSE, MOUSE_BUTTON_MIDDLE, x, y, 0, 0);
+  }
+}
 
-  delay(100);
+/** Read magnetic field and apply filtering. */
+void getMagnet() {
+  double x, y, z;
+  mag.getMagneticField(&x, &y, &z);
 
-  // crude offset calibration on first boot
-  for (int i = 1; i <= calSamples; i++) {
-    delay(10);  // Short delay for measurement time
-    
-    // Reading raw data
-    Wire.beginTransmission(TLV493D_ADDR);
-    Wire.write(0x00);  // Registro dati
-    Wire.endTransmission();
-    
-    Wire.requestFrom(TLV493D_ADDR, 6);
-    if (Wire.available() == 6) {
-      uint8_t data[6];
-      for (int i = 0; i < 6; i++) {
-        data[i] = Wire.read();
-      }
+  xCurrent = xFilter.updateEstimate(x - xOffset);
+  yCurrent = yFilter.updateEstimate(y - yOffset);
+  zCurrent = zFilter.updateEstimate(z - zOffset);
 
-      int16_t x = ((data[0] << 4) | (data[4] >> 4));
-      int16_t y = ((data[1] << 4) | (data[4] & 0x0F));
-      int16_t z = ((data[2] << 4) | (data[5] & 0x0F));
+  static uint32_t ms = 0;
+  static uint32_t ms2 = 0;
 
-      if (x > 2047) x -= 4096;
-      if (y > 2047) y -= 4096;
-      if (z > 2047) z -= 4096;
+  if (abs(xCurrent) > xyThreshold || abs(yCurrent) > xyThreshold) {
+    int xMove = map(xCurrent, -inRange, inRange, -outRange, outRange);
+    int yMove = map(yCurrent, -inRange, inRange, -outRange, outRange);
 
-      xOffset += x;
-      yOffset += y;
-      zOffset += z;
+    if (abs(zCurrent) > zThreshold) {
+      usb_hid.keyboardReport(RID_KEYBOARD, KEYBOARD_MODIFIER_LEFTSHIFT, key_none);
+      isOrbit = true;
+      ms2 = millis();
+    }
 
-      Serial.print(".");
-    } else {
-      Serial.println("Errore lettura dati!");
+    ms = millis();
+    process_hid(xMove, -yMove);
+  } else {
+    if (millis() - ms > 200 && middle) {
+      usb_hid.mouseButtonRelease(RID_MOUSE);
+      middle = false;
+      delay(10);
+    }
+    if (millis() - ms2 > 200 && isOrbit) {
+      usb_hid.keyboardRelease(RID_KEYBOARD);
+      isOrbit = false;
+      delay(10);
     }
   }
 
-  xOffset = xOffset / calSamples;
-  yOffset = yOffset / calSamples;
-  zOffset = zOffset / calSamples;
-
+  Serial.print(xCurrent);
+  Serial.print(",");
+  Serial.print(yCurrent);
+  Serial.print(",");
+  Serial.print(zCurrent);
   Serial.println();
-  Serial.println(xOffset);
-  Serial.println(yOffset);
-  Serial.println(zOffset);
 }
 
+/** Main loop: watches buttons and processes HID inputs. */
 void loop() {
-  // keep watching the push buttons
   button1.tick();
   button2.tick();
 
-  // Read raw data
-  delay(10);  // Wait for measurement to complete
-  
-  Wire.beginTransmission(TLV493D_ADDR);
-  Wire.write(0x00);  // Registro dati
-  Wire.endTransmission();
-  
-  Wire.requestFrom(TLV493D_ADDR, 6);
-  if (Wire.available() == 6) {
-    uint8_t data[6];
-    for (int i = 0; i < 6; i++) {
-      data[i] = Wire.read();
-    }
+#ifdef TINYUSB_NEED_POLLING_TASK
+  TinyUSBDevice.task();
+#endif
 
-    int16_t x = ((data[0] << 4) | (data[4] >> 4));
-    int16_t y = ((data[1] << 4) | (data[4] & 0x0F));
-    int16_t z = ((data[2] << 4) | (data[5] & 0x0F));
-
-    if (x > 2047) x -= 4096;
-    if (y > 2047) y -= 4096;
-    if (z > 2047) z -= 4096;
-
-    // Update the filters with the raw data minus the offset
-    xCurrent = xFilter.updateEstimate(x - xOffset);
-    yCurrent = yFilter.updateEstimate(y - yOffset);
-    zCurrent = zFilter.updateEstimate(z - zOffset);
-
-    // Check the center threshold
-    if (abs(xCurrent) > xyThreshold || abs(yCurrent) > xyThreshold) {
-      int xMove = 0;
-      int yMove = 0;
-
-      // Map the magnetometer x, y to the allowed 127 range for HID reports
-      xMove = map(xCurrent, -inRange, inRange, -outRange, outRange);
-      yMove = map(yCurrent, -inRange, inRange, -outRange, outRange);
-
-      // Press shift to orbit in Fusion 360 if the pan threshold is not crossed (z-axis)
-      if (abs(zCurrent) < zThreshold && !isOrbit) {
-        Keyboard.press(KEY_LEFT_SHIFT);
-        isOrbit = true;
-      }
-
-      // Pan or orbit by holding the middle mouse button and moving proportional to the xy axis
-      Mouse.press(MOUSE_MIDDLE);
-      Mouse.move(yMove, xMove, 0);
-    } else {
-      // Release the mouse and keyboard if within the center threshold
-      Mouse.release(MOUSE_MIDDLE);
-      Keyboard.releaseAll();
-      isOrbit = false;
-    }
-
-    // Print the filtered data
-    Serial.print(xCurrent);
-    Serial.print(",");
-    Serial.print(yCurrent);
-    Serial.print(",");
-    Serial.print(zCurrent);
-    Serial.println();
-  } else {
-    Serial.println("Errore lettura dati!");
+  if (!TinyUSBDevice.mounted()) {
+    return;
   }
+  getMagnet();
 }
 
-// Go to home view in Fusion 360 by pressing (CMD + SHIFT + H) shortcut assigned to the custom Add-in command
-void goHome() {
-  Keyboard.press(KEY_LEFT_GUI);
-  Keyboard.press(KEY_LEFT_SHIFT);
-  Keyboard.write('h');
-
+/** Button 1 action: Simulate Shift + GUI + H keypress. */
+void btn1() {
+  usb_hid.keyboardReport(RID_KEYBOARD, KEYBOARD_MODIFIER_LEFTSHIFT + KEYBOARD_MODIFIER_LEFTGUI, key_h);
   delay(10);
-  Keyboard.releaseAll();
-  Serial.println("Pressed home");
+  usb_hid.keyboardRelease(RID_KEYBOARD);
 }
 
-// Fit to screen by pressing the middle mouse button twice
-void fitToScreen() {
-  Mouse.press(MOUSE_MIDDLE);
-  Mouse.release(MOUSE_MIDDLE);
-  Mouse.press(MOUSE_MIDDLE);
-  Mouse.release(MOUSE_MIDDLE);
-
-  Serial.println("Pressed fit");
+/** Button 2 action: Simulate double middle mouse click. */
+void btn2() {
+  usb_hid.mouseButtonPress(RID_MOUSE, MOUSE_BUTTON_MIDDLE);
+  delay(10);
+  usb_hid.mouseButtonRelease(RID_MOUSE);
+  delay(10);
+  usb_hid.mouseButtonPress(RID_MOUSE, MOUSE_BUTTON_MIDDLE);
+  delay(10);
+  usb_hid.mouseButtonRelease(RID_MOUSE);
 }
