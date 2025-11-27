@@ -7,6 +7,7 @@ This project implements a DIY 3D mouse (SpaceMouse) using the TLV493D 3D magneti
 - **Kalman Filtering**: A simple Kalman filter is applied to smooth the sensor data, improving stability and precision.
 - **Mouse and Keyboard Input**: The 3D sensor's values are mapped to HID (Human Interface Device) inputs, allowing control of the mouse and keyboard.
 - **Buttons for Quick Actions**: Two buttons are used to trigger specific actions like going to the home view or fitting the view to the screen in Fusion 360.
+- **3D Connexion Compatibility**: It emulate a space mouse from 3dconnexion so you can use it wiht the orinal app
   
 ## Setup
 ### Components
@@ -44,13 +45,8 @@ You can install these libraries via the Arduino Library Manager or download them
 2. Open Fusion 360 (or any CAD software that supports 3D mouse input).
 3. Use the magnetic field from the TLV493D sensor to control the mouse and navigate the 3D workspace.
 
-### Button Functions
-- **Button 1 (pin 2)**: Press to go to the home view in Fusion 360 (CMD + SHIFT + H).
-- **Button 2 (pin 3)**: Press twice to simulate a "Fit to Screen" action (middle mouse button double-click).
-
 ## Attribution
-This project is based on the original work from [DIY SpaceMouse](https://github.com/sb-ocr/diy-spacemouse/tree/main/Code). The original file was modified to integrate the TLV493D sensor, implement Kalman filtering, and add mouse/keyboard functionality.
+This project is based on the original work from Salim [DIY SpaceMouse](https://github.com/sb-ocr/diy-spacemouse/tree/main/Code).
+The code is based on the alternative version from wiz78 [3D Mouse](https://github.com/wiz78/3DMouse)
+It was modified for working on a rp2040 and a TLV493D not original.
 
-## License
-
-This project is open-source and available under the **GNU General Public License v3.0** (GPL-3.0). See the [LICENSE](LICENSE) file for details.
