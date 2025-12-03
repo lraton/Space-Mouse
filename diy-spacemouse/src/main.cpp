@@ -20,12 +20,12 @@ static constexpr unsigned long MAX_INACTIVITY_TIME = LED_FADING_INACTIVITY_TIME 
 
 static constexpr float PWM_FREQ = 1000;
 
-static constexpr int MAGNETOMETER_SENSITIVITY = 100; // Increased from 10
+static constexpr int MAGNETOMETER_SENSITIVITY = 10; // Increased from 10
 static constexpr int MAGNETOMETER_INPUT_RANGE = 2.5 * MAGNETOMETER_SENSITIVITY;
 static constexpr int MAGNETOMETER_INPUT_Z_RANGE = MAGNETOMETER_INPUT_RANGE * 8;
-static constexpr float MAGNETOMETER_XY_THRESHOLD = 0.4;         // Reduced from 0.4
-static constexpr float MAGNETOMETER_Z_THRESHOLD = 0.5;           // Reduced from 0.9
-static constexpr float MAGNETOMETER_Z_ORBIT_MAX_THRESHOLD = 1; // Reduced from 1.7
+static constexpr float MAGNETOMETER_XY_THRESHOLD = 0.4;          // Reduced from 0.4
+static constexpr float MAGNETOMETER_Z_THRESHOLD = 0.9;           // Reduced from 0.9
+static constexpr float MAGNETOMETER_Z_ORBIT_MAX_THRESHOLD = 1.7; // Reduced from 1.7
 
 static constexpr int HID_POLL_INTERVAL = 4;
 static constexpr int HID_REPORT_LOGICAL_RANGE = 350;
@@ -353,9 +353,9 @@ void readMagnetometer()
         zCurrent = 0;
         absZ = 0;
     }
-
     if (isOrbit)
     {
+
         if (!xCurrent && !yCurrent && (!absZ || (zCurrent > 0) || (absZ > MAGNETOMETER_Z_ORBIT_MAX_THRESHOLD)))
             isOrbit = false;
     }
@@ -364,20 +364,24 @@ void readMagnetometer()
 
     if (isOrbit)
     {
+
         ryCurrent = xCurrent;
         rxCurrent = yCurrent;
+        rzCurrent = zCurrent;
         xCurrent = 0;
         yCurrent = 0;
         zCurrent = 0;
     }
     else
     {
+
         rxCurrent = 0;
         ryCurrent = 0;
         rzCurrent = 0;
 
         if (absZ)
         {
+
             xCurrent = 0;
             yCurrent = 0;
 
@@ -487,4 +491,6 @@ void loop()
         button2.tick();
         sendHidReports();
     }
+
+    delay(10); // Start with 10ms, adjust if needed
 }
